@@ -7,3 +7,4 @@ nextcord
 scikit-image
 torch
 python-dotenv
+requests
