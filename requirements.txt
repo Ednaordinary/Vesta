@@ -1,0 +1,9 @@
+numpy
+opencv_python
+opencv_python_headless
+Pillow
+sentence_transformers
+nextcord
+scikit-image
+torch
+python-dotenv
