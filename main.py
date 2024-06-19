@@ -3,6 +3,7 @@ import sys
 import time
 import io
 import os
+import gc
 import asyncio
 from typing import Optional
 from dotenv import load_dotenv
@@ -54,13 +55,17 @@ def encoder():
     global model_queue
     global searchers
     model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", model_kwargs=dict(attn_implementation="flash_attention_2")).to("cpu")
+    gc.collect()
+    torch.cuda.empty_cache()
     while True:
         while model_queue == []:
             if model.device.type == "cpu" and searchers <= 0:
                 searchers = 0
                 model.to('cpu')
+                gc.collect()
+                torch.cuda.empty_cache()
             time.sleep(0.02)
-        if model.device.type != "cuda": model.to("cuda")
+        if model.device.type != "cuda": model.to("cuda"); print("loading on gpu")
         now = [x for x in model_queue]
         model_queue = []
         paths = []
@@ -170,7 +175,99 @@ async def on_ready():
     os.makedirs("./index", exist_ok=True)
     for guild in client.guilds:
         threading.Thread(target=add_guild_instance, args=[guild]).start()
-            
+
+discord_attacher = {}
+
+def image_search_download(interaction, attachment, idx):
+    #multi thread this because downloading takes a long time
+    global discord_attacher
+    file_end = ""
+    if attachment.content_type == "image/jpeg":
+        file_end = ".jpg"
+    elif attachment.content_type == "image/png":
+        file_end = ".png"
+    discord_attacher[interaction][idx] = discord.File(fp=io.BytesIO(requests.get(attachment.url).content), filename=str(idx) + file_end)
+
+def unload_model():
+    #just because handling it in the image_search thread takes time
+    global model
+    global searchers
+    model.to('cpu')
+    gc.collect()
+    torch.cuda.empty_cache()
+
+def image_search_loader(interaction, path):
+    global discord_attacher
+    discord_attacher[interaction].append((path, np.load(path)))
+
+def image_search(interaction, term):
+    #Changed to a different thread because otherwise it blocks and concurrent requests aren't handled
+    global searchers
+    global model
+    global discord_attacher
+    term = term.strip()
+    searchers += 1
+    model.to("cuda")
+    term_embeds = model.encode(term)
+    searchers -= 1
+    if searchers == 0:
+        threading.Thread(target=unload_model).start()
+    discord_attacher[interaction] = []
+    threads = []
+    for path in [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser("index" + str(interaction.guild.id))) for f in fn]:
+        if "npy" in path:
+            threads.append(threading.Thread(target=image_search_loader, args=[interaction, path]).start())
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    paths = []
+    embeds = []
+    for path, embed in discord_attacher[interaction]:
+        paths.append(path)
+        embeds.append(embed)
+    del discord_attacher
+    scores = ST_util.cos_sim(torch.tensor(np.array(term_embeds), device="cuda"), torch.tensor(np.array(embeds), device="cuda"))
+    values, idxs = torch.topk(scores, 10)
+    images = []
+    for idx in idxs[0]:
+        if isinstance(idx.item(), int):
+            images.append(paths[int(idx)])
+    image_attachments = []
+    for path in images:
+        path = str(path)
+        try:
+            if "threads" in path:
+                channel = client.get_channel(int(path.split("/")[4]))
+                message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[5])), loop=client.loop).result()
+                number = int(path.split("/")[6].split(".")[0])
+                image_attachments.append(message.attachments[number])
+            else:
+                channel = client.get_channel(int(path.split("/")[2]))
+                message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[3])), loop=client.loop).result()
+                number = int(path.split("/")[4].split(".")[0])
+                image_attachments.append(message.attachments[number])
+        except Exception as e:
+            print("failed to find!")
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            print(exc_type, fname, exc_tb.tb_lineno)
+            print(repr(e))
+            pass
+    download_threads = []
+    discord_attacher[interaction] = [0]*len(image_attachments)
+    for idx, attachment in enumerate(image_attachments):
+        download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
+    for thread in download_threads:
+        thread.start()
+    for thread in download_threads:
+        thread.join()
+    results = []
+    for result in discord_attacher[interaction]:
+        if type(result) == discord.File:
+            results.append(result)
+    asyncio.run_coroutine_threadsafe(coro=interaction.followup.send("Here are " + str(len(results)) + " results.", files=results), loop=client.loop)
+    del discord_attacher[interaction]
 
 @client.slash_command(description="Search for an image with the description.")
 async def find_image(
@@ -182,60 +279,11 @@ async def find_image(
         ),
 ):
     await interaction.response.defer()
-    global searchers
     global model
     if model == None:
         await interaction.followup.send("The bot is still initializing.")
     else:
-        term = term.strip()
-        searchers += 1
-        model.to("cuda")
-        term_embeds = model.encode(term)
-        searchers -= 1
-        paths = []
-        embeds = []
-        for path in Path('./index/' + str(interaction.guild.id)).rglob('*.npy'):
-            paths.append(path)
-            embeds.append(np.load(path))
-        scores = ST_util.dot_score(np.array(term_embeds), np.array(embeds))
-        values, idxs = torch.topk(scores, 10)
-        images = []
-        for idx in idxs[0]:
-            if isinstance(idx.item(), int):
-                images.append(paths[int(idx)])
-        image_attachments = []
-        for path in images:
-            path = str(path)
-            try:
-                if "threads" in path:
-                    channel = client.get_channel(int(path.split("/")[4]))
-                    message = await channel.fetch_message(int(path.split("/")[5]))
-                    number = int(path.split("/")[6].split(".")[0])
-                    image_attachments.append(message.attachments[number])
-                else:
-                    channel = client.get_channel(int(path.split("/")[2]))
-                    message = await channel.fetch_message(int(path.split("/")[3]))
-                    number = int(path.split("/")[4].split(".")[0])
-                    image_attachments.append(message.attachments[number])
-            except Exception as e:
-                print("failed to find!")
-                exc_type, exc_obj, exc_tb = sys.exc_info()
-                fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-                print(exc_type, fname, exc_tb.tb_lineno)
-                print(repr(e))
-                pass
-        results = []
-        for idx, attachment in enumerate(image_attachments):
-            with io.BytesIO() as imagebn:
-                await attachment.save(fp=imagebn)
-                file_end = ""
-                if attachment.content_type == "image/jpeg":
-                    file_end = ".jpg"
-                elif attachment.content_type == "image/png":
-                    file_end = ".png"
-                imagebn.seek(0)
-                results.append(discord.File(fp=imagebn, filename=str(idx) + file_end))
-        await interaction.followup.send("Here are " + str(len(results)) + " results.", files=results)
+        threading.Thread(target=image_search, args=[interaction, term]).start()
 
 threading.Thread(target=downloader).start()
 threading.Thread(target=encoder).start()
