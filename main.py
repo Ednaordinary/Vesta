@@ -175,10 +175,10 @@ async def on_ready():
 @client.slash_command(description="Search for an image with the description.")
 async def find_image(
         interaction: discord.Interaction,
-        terms: str = discord.SlashOption(
-            name="terms",
+        term: str = discord.SlashOption(
+            name="term",
             required=True,
-            description="Terms to search for, separated by comma.",
+            description="Term to search for.",
         ),
 ):
     await interaction.response.defer()
@@ -187,11 +187,10 @@ async def find_image(
     if model == None:
         await interaction.followup.send("The bot is still initializing.")
     else:
-        terms = terms.split(",")
-        terms = [x.strip() for x in terms]
+        term = term.strip()
         searchers += 1
         model.to("cuda")
-        term_embeds = model.encode(terms)
+        term_embeds = model.encode(term)
         searchers -= 1
         paths = []
         embeds = []
