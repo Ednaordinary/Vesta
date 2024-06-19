@@ -3,9 +3,13 @@ Semantic image search in discord. Search all images in a sever with a text phras
 
 ## Install
 `git clone https://github.com/Ednaordinary/Vesta/`
+
 `cd Vesta`
+
 `python3 -m venv venv`
+
 `source venv/bin/activate`
+
 `pip install -r requirements.txt`
 
 Then, create a ".env" with "DISCORD_TOKEN=" set to your token.
