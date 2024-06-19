@@ -9,12 +9,14 @@ from dotenv import load_dotenv
 import threading
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as ST_util
-from PIL import Image
+from PIL import Image, ImageFile
 import numpy as np
 import shutil
 from pathlib import Path
 import torch
 import requests
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -30,9 +32,12 @@ download_queue = []
 
 def download_thread(url, path):
     global model_queue
-    content = requests.get(url).content
-    img = Image.open(io.BytesIO(content))
-    model_queue.append(tuple((img, path)))
+    try:
+        content = requests.get(url).content
+        img = Image.open(io.BytesIO(content))
+        model_queue.append(tuple((img, path)))
+    except:
+        pass
 
 def downloader():
     global download_queue
@@ -60,42 +65,16 @@ def encoder():
         model_queue = []
         paths = []
         contents = []
-        print("now:", len(now))
         for url, path in now:
             paths.append(path)
             contents.append(url)
-            #try:
-            #content = requests.get(url).content
-            #img = Image.open(io.BytesIO(content))
-            #contents.append(img)
-            #except Exception as e:
-            #    exc_type, exc_obj, exc_tb = sys.exc_info()
-            #    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-            #    print(exc_type, fname, exc_tb.tb_lineno)
-            #    print(repr(e))
-            #    paths.pop(-1)
-            #    pass
-        print("contents", len(contents))
         if len(contents) != 0:
-            embeds = model.encode(contents)
-            for idx, embed in enumerate(embeds):
-                np.save(paths[idx], embed)
-                print("^"*len(embeds), flush=True, end='')
-        #try:
-        #    url = model_queue[0][0]
-        #    path = model_queue[0][1]
-        #    content = requests.get(url).content
-        #    img = Image.open(io.BytesIO(content))
-        #    embeds = model.encode(img)
-        #    np.save(path, embeds)
-        #    print("^", flush=True, end='')
-        #except Exception as e:
-        #    exc_type, exc_obj, exc_tb = sys.exc_info()
-        #    fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        #    print(exc_type, fname, exc_tb.tb_lineno)
-        #    print(repr(e))
-        #    pass
-        #model_queue.pop(0)
+            try:
+                embeds = model.encode(contents)
+                for idx, embed in enumerate(embeds):
+                    np.save(paths[idx], embed)
+                    print("^"*len(embeds), flush=True, end='')
+            except: pass
 
 async def image_indexer(channel):
     global model
