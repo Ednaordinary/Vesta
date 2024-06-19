@@ -214,19 +214,19 @@ def image_search(interaction, term):
         threading.Thread(target=unload_model).start()
     discord_attacher[interaction] = []
     threads = []
-    for path in [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser("index" + str(interaction.guild.id))) for f in fn]:
-        if "npy" in path:
-            threads.append(threading.Thread(target=image_search_loader, args=[interaction, path]).start())
+    for path in [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser("index/" + str(interaction.guild.id))) for f in fn]:
+        if "npy" in str(path):
+            threads.append(threading.Thread(target=image_search_loader, args=[interaction, str(path)]))
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     paths = []
     embeds = []
-    for path, embed in discord_attacher[interaction]:
-        paths.append(path)
-        embeds.append(embed)
-    del discord_attacher
+    for emb_idx in discord_attacher[interaction]:
+        paths.append(emb_idx[0])
+        embeds.append(emb_idx[1])
+    del discord_attacher[interaction]
     scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cuda"), torch.tensor(np.array(embeds), device="cuda"))
     values, idxs = torch.topk(scores, 10)
     images = []
