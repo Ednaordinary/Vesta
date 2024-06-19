@@ -227,7 +227,7 @@ def image_search(interaction, term):
         paths.append(path)
         embeds.append(embed)
     del discord_attacher
-    scores = ST_util.cos_sim(torch.tensor(np.array(term_embeds), device="cuda"), torch.tensor(np.array(embeds), device="cuda"))
+    scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cuda"), torch.tensor(np.array(embeds), device="cuda"))
     values, idxs = torch.topk(scores, 10)
     images = []
     for idx in idxs[0]:
