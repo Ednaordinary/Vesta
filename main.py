@@ -59,12 +59,13 @@ def encoder():
     torch.cuda.empty_cache()
     while True:
         while model_queue == []:
-            if model.device.type == "cpu" and searchers <= 0:
+            if not model.device.type == "cpu" and searchers <= 0:
                 searchers = 0
                 model.to('cpu')
                 gc.collect()
                 torch.cuda.empty_cache()
             time.sleep(0.02)
+        searchers += 1 # the searcher thread will also try to handle model migration. stop it
         if model.device.type != "cuda": model.to("cuda"); print("loading on gpu")
         now = [x for x in model_queue]
         model_queue = []
@@ -80,6 +81,7 @@ def encoder():
                     np.save(paths[idx], embed)
                     print("^"*len(embeds), flush=True, end='')
             except: pass
+        searchers -= 1
 
 async def image_indexer(channel):
     global model
@@ -109,6 +111,7 @@ async def image_indexer(channel):
                             print("x", flush=True, end='')
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))                        
                 elif type(channel) == discord.Thread:
+                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/threads", exist_ok=True)
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
@@ -137,18 +140,20 @@ def add_guild_instance(guild):
     if not os.path.isdir("./index/" + str(guild.id)):
         os.makedirs("./index/" + str(guild.id), exist_ok=True)
     for channel in guild.channels:
-        if model_users > 3:
-            while model_users > 3:
+        if model_users > 5:
+            while model_users > 5:
                 time.sleep(0.1)
         model_users += 1
         if type(channel) == discord.TextChannel:
             os.makedirs("./index/" + str(guild.id) + "/" + str(channel.id), exist_ok=True)
             call_read_channel(channel)
         elif type(channel) == discord.ForumChannel:
+            os.makedirs("./index/" + str(guild.id) + "/" + str(thread.parent.id), exist_ok=True
             for thread in channel.threads:
                 os.makedirs("./index/" + str(guild.id) + "/" + str(thread.parent.id) + "/threads/" + str(thread.id), exist_ok=True)
                 call_read_channel(thread)
         elif type(channel) == discord.Thread:
+            os.makedirs("./index/" + str(guild.id) + "/" + str(channel.parent.id), exist_ok=True)
             os.makedirs("./index/" + str(guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id), exist_ok=True)
             call_read_channel(channel)
         else:
@@ -269,6 +274,74 @@ def image_search(interaction, term):
     asyncio.run_coroutine_threadsafe(coro=interaction.followup.send("Here are " + str(len(results)) + " results.", files=results), loop=client.loop)
     del discord_attacher[interaction]
 
+@client.event
+async def on_message(message):
+    if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+        if type(message.channel) == discord.TextChannel:
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
+            for idx, attachment in enumerate(message.attachments):
+                if attachment.content_type in ["image/jpeg", "image/png"]:
+                    print("x", flush=True, end='')
+                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))                        
+        elif type(message.channel) == discord.Thread:
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id), exist_ok=True)
+            for idx, attachment in enumerate(message.attachments):
+                if attachment.content_type in ["image/jpeg", "image/png"]:
+                    print("x", flush=True, end='')
+                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
+
+@client.event
+async def on_raw_message_delete(payload):
+    channel_id = payload.channel_id
+    guild_id = payload.guild_id
+    message_id = payload.message_id
+    channel = client.get_channel(channel_id)
+    if type(channel) == discord.TextChannel:
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")      
+    elif type(channel) == discord.Thread:
+        channel = client.get_channel(channel_id)
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
+
+@client.event
+async def on_raw_message_edit(payload):
+    channel_id = payload.channel_id
+    guild_id = payload.guild_id
+    message_id = payload.message_id
+    channel = client.get_channel(channel_id)
+    if type(channel) == discord.TextChannel:
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
+        message = await client.fetch_message(message_id)
+        if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
+            for idx, attachment in enumerate(message.attachments):
+                if attachment.content_type in ["image/jpeg", "image/png"]:
+                    print("x", flush=True, end='')
+                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))    
+    elif type(channel) == discord.Thread:
+        channel = client.get_channel(channel_id)
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
+        message = await client.fetch_message(message_id)
+        
+        #    os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
+        #    for idx, attachment in enumerate(message.attachments):
+        #        if attachment.content_type in ["image/jpeg", "image/png"]:
+        #            print("x", flush=True, end='')
+        #            download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
+        if message.attachments and message.attachments != [] and message.user.id != client.user.id:           
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id), exist_ok=True)
+            for idx, attachment in enumerate(message.attachments):
+                if attachment.content_type in ["image/jpeg", "image/png"]:
+                    print("x", flush=True, end='')
+                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
+
 @client.slash_command(description="Search for an image with the description.")
 async def find_image(
         interaction: discord.Interaction,
@@ -281,7 +354,9 @@ async def find_image(
     await interaction.response.defer()
     global model
     if model == None:
-        await interaction.followup.send("The bot is still initializing.")
+        while model == None:
+            time.sleep(0.01)
+        threading.Thread(target=image_search, args=[interaction, term]).start()
     else:
         threading.Thread(target=image_search, args=[interaction, term]).start()
 
