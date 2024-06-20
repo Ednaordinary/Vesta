@@ -287,20 +287,24 @@ def image_search(interaction, term):
 
 @client.event
 async def on_message(message):
+    global model_users
     if message.attachments and message.attachments != [] and message.author.id != client.user.id:
         if type(message.channel) == discord.TextChannel:
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print("x", flush=True, end='')
+                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                     download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))                        
         elif type(message.channel) == discord.Thread:
+            if model_users == 0: # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
+                with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
+                    progress_lock.write(str(time.time()))
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print("x", flush=True, end='')
+                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                     download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
 
 @client.event
@@ -319,6 +323,7 @@ async def on_raw_message_delete(payload):
 
 @client.event
 async def on_raw_message_edit(payload):
+    global model_users
     channel_id = payload.channel_id
     guild_id = payload.guild_id
     message_id = payload.message_id
@@ -328,23 +333,29 @@ async def on_raw_message_edit(payload):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
         message = await channel.fetch_message(message_id)
         if message.attachments and message.attachments != [] and message.author.id != client.user.id:
+            if model_users == 0: # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
+                with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
+                    progress_lock.write(str(time.time()))
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print("x", flush=True, end='')
+                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                     download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))    
     elif type(channel) == discord.Thread:
         channel = client.get_channel(channel_id)
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
         message = await channel.fetch_message(message_id)
-        if message.attachments and message.attachments != [] and message.user.id != client.user.id:           
+        if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+            if model_users == 0: # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
+                with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
+                    progress_lock.write(str(time.time()))
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print("x", flush=True, end='')
+                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                     download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
 
 @client.slash_command(description="Search for an image with the description.")
