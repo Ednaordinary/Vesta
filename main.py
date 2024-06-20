@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 import torch
 import requests
+import datetime
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -97,20 +98,19 @@ async def image_indexer(channel):
     global model_users
     global download_queue
     try:
+        last_time = None
         if os.path.exists("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt"):
             with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt", "r") as progress_lock:
-                # If a channel was in progress, it cannot be recovered. Delete and start over.
-                if progress_lock.readlines()[0][0] == "1":
-                    shutil.rmtree("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/")
+                try:
+                    time_stamp = progress_lock.readlines()[0]
+                except:
+                    time_stamp = "0"
+                if time_stamp in ["0", "1"]:
+                    last_time = None
                 else:
-                    #Channel is already properly indexed. Stop now.
-                    model_users -= 1
-                    return
+                    last_time = datetime.datetime.fromtimestamp(float(time_stamp))
         os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
-        with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
-            # If a channel indexing is in progress and we try to search, we need to send an error to the user.
-            progress_lock.write("1")
-        async for message in channel.history(limit=None):
+        async for message in channel.history(limit=None, after=last_time):
             print(".", end='', flush=True)
             if message.attachments and message.attachments != [] and message.author.id != client.user.id:
                 if type(channel) == discord.TextChannel:
@@ -128,7 +128,7 @@ async def image_indexer(channel):
                             print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(idx) + ".npy")))
         with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
-            progress_lock.write("0")
+            progress_lock.write(str(time.time()))
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
@@ -139,7 +139,6 @@ async def image_indexer(channel):
 
 def call_read_channel(channel):
     #this function might not have much reason to exist
-    #channel = client.get_channel(channel)
     if channel is not None:
         asyncio.run_coroutine_threadsafe(coro=image_indexer(channel), loop=client.loop)
 
