@@ -93,11 +93,11 @@ async def image_indexer(channel):
                 # If a channel was in progress, it cannot be recovered. Delete and start over.
                 if progress_lock.readlines()[0][0] == "1":
                     shutil.rmtree("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/")
-                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
                 else:
                     #Channel is already properly indexed. Stop now.
                     model_users -= 1
                     return
+        os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
         with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
             # If a channel indexing is in progress and we try to search, we need to send an error to the user.
             progress_lock.write("1")
@@ -148,7 +148,7 @@ def add_guild_instance(guild):
             os.makedirs("./index/" + str(guild.id) + "/" + str(channel.id), exist_ok=True)
             call_read_channel(channel)
         elif type(channel) == discord.ForumChannel:
-            os.makedirs("./index/" + str(guild.id) + "/" + str(thread.parent.id), exist_ok=True
+            os.makedirs("./index/" + str(guild.id) + "/" + str(channel.id), exist_ok=True)
             for thread in channel.threads:
                 os.makedirs("./index/" + str(guild.id) + "/" + str(thread.parent.id) + "/threads/" + str(thread.id), exist_ok=True)
                 call_read_channel(thread)
