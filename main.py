@@ -223,8 +223,9 @@ def image_search(interaction, term):
     model = model.to("cuda")
     term_embeds = model.encode(term)
     searchers -= 1
-    if searchers == 0:
-        threading.Thread(target=unload_model).start()
+    # encoder thread will take care of it. causes errors I think
+    #if searchers == 0:
+    #    threading.Thread(target=unload_model).start()
     discord_attacher[interaction] = []
     threads = []
     for path in [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser("index/" + str(interaction.guild.id))) for f in fn]:
@@ -284,7 +285,7 @@ def image_search(interaction, term):
 
 @client.event
 async def on_message(message):
-    if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+    if message.attachments and message.attachments != [] and message.author.id != client.user.id:
         if type(message.channel) == discord.TextChannel:
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
@@ -324,7 +325,7 @@ async def on_raw_message_edit(payload):
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
         message = await channel.fetch_message(message_id)
-        if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+        if message.attachments and message.attachments != [] and message.author.id != client.user.id:
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
@@ -335,12 +336,6 @@ async def on_raw_message_edit(payload):
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
         message = await channel.fetch_message(message_id)
-        
-        #    os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
-        #    for idx, attachment in enumerate(message.attachments):
-        #        if attachment.content_type in ["image/jpeg", "image/png"]:
-        #            print("x", flush=True, end='')
-        #            download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
         if message.attachments and message.attachments != [] and message.user.id != client.user.id:           
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
