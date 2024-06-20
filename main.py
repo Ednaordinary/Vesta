@@ -31,6 +31,12 @@ model_queue = []
 searchers = 0
 download_queue = []
 
+class term_colors:
+    LOAD = '\033[96m' # On load or unload state
+    DOWNLOAD = '\033[94m' # On submission to the attachment downloaded
+    ENCODER = '\033[92m' # Encoder info
+    END = '\033[0m' #End coloring
+
 def download_thread(url, path):
     global model_queue
     try:
@@ -61,16 +67,17 @@ def encoder():
         while model_queue == []:
             if not model.device.type == "cpu" and searchers <= 0:
                 searchers = 0
-                model.to('cpu')
+                model = model.to('cpu')
                 gc.collect()
                 torch.cuda.empty_cache()
             time.sleep(0.02)
         searchers += 1 # the searcher thread will also try to handle model migration. stop it
-        if model.device.type != "cuda": model.to("cuda"); print("loading on gpu")
+        if model.device.type != "cuda": model = model.to("cuda"); print(term_colors.LOAD + " loading encoder on gpu " + term_colors.END, end='')
         now = [x for x in model_queue]
         model_queue = []
         paths = []
         contents = []
+        print(term_colors.ENCODER + "e:" + str(len(now)) + term_colors.END, end='')
         for url, path in now:
             paths.append(path)
             contents.append(url)
@@ -79,9 +86,11 @@ def encoder():
                 embeds = model.encode(contents)
                 for idx, embed in enumerate(embeds):
                     np.save(paths[idx], embed)
-                    print("^"*len(embeds), flush=True, end='')
+                    print(term_colors.ENCODER + "^" + term_colors.END, flush=True, end='')
             except: pass
         searchers -= 1
+        if model_queue == []:
+            print("\nencoder caught up!")
 
 async def image_indexer(channel):
     global model
@@ -108,7 +117,7 @@ async def image_indexer(channel):
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + str(message.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
                         if attachment.content_type in ["image/jpeg", "image/png"]:
-                            print("x", flush=True, end='')
+                            print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))                        
                 elif type(channel) == discord.Thread:
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
@@ -116,7 +125,7 @@ async def image_indexer(channel):
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
                         if attachment.content_type in ["image/jpeg", "image/png"]:
-                            print("x", flush=True, end='')
+                            print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(idx) + ".npy")))
         with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
             progress_lock.write("0")
@@ -160,7 +169,6 @@ def add_guild_instance(guild):
             model_users -= 1
     while model_users > 0:
         time.sleep(0.01)
-    print("\nDone with", guild.name)
 
 @client.event
 async def on_guild_join(guild):
@@ -197,7 +205,7 @@ def unload_model():
     #just because handling it in the image_search thread takes time
     global model
     global searchers
-    model.to('cpu')
+    model = model.to('cpu')
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -212,7 +220,7 @@ def image_search(interaction, term):
     global discord_attacher
     term = term.strip()
     searchers += 1
-    model.to("cuda")
+    model = model.to("cuda")
     term_embeds = model.encode(term)
     searchers -= 1
     if searchers == 0:
@@ -315,7 +323,7 @@ async def on_raw_message_edit(payload):
     if type(channel) == discord.TextChannel:
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
-        message = await client.fetch_message(message_id)
+        message = await channel.fetch_message(message_id)
         if message.attachments and message.attachments != [] and message.user.id != client.user.id:
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
@@ -326,7 +334,7 @@ async def on_raw_message_edit(payload):
         channel = client.get_channel(channel_id)
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
-        message = await client.fetch_message(message_id)
+        message = await channel.fetch_message(message_id)
         
         #    os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
         #    for idx, attachment in enumerate(message.attachments):
