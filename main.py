@@ -38,6 +38,14 @@ class term_colors:
     ENCODER = '\033[92m' # Encoder info
     END = '\033[0m' #End coloring
 
+class InfoButton(discord.ui.View):
+    def __init__(self, *, timeout=None, links):
+        super().__init__(timeout=timeout)
+        self.links = links
+    @discord.ui.button(label="🛈", style=discord.ButtonStyle.primary)
+    async def info_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_message("".join([(str(ind+1) + " - " + str(x) + "\n") for ind, x in enumerate(self.links)]))
+
 def download_thread(url, path):
     global model_queue
     try:
@@ -212,6 +220,11 @@ def image_search_loader(interaction, path):
     global discord_attacher
     discord_attacher[interaction].append((path, np.load(path)))
 
+async def message_view_sender(interaction, content, files, links):
+    #It freaks out if there is not an event loop while constructing the view
+    view = InfoButton(links=links)
+    await interaction.followup.send(content, files=files, view=view)
+
 def image_search(interaction, term):
     #Changed to a different thread because otherwise it blocks and concurrent requests aren't handled
     global searchers
@@ -247,6 +260,7 @@ def image_search(interaction, term):
         if isinstance(idx.item(), int):
             images.append(paths[int(idx)])
     image_attachments = []
+    messages = []
     for path in images:
         path = str(path)
         try:
@@ -255,11 +269,13 @@ def image_search(interaction, term):
                 message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[5])), loop=client.loop).result()
                 number = int(path.split("/")[6].split(".")[0])
                 image_attachments.append(message.attachments[number])
+                messages.append(message)
             else:
                 channel = client.get_channel(int(path.split("/")[2]))
                 message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[3])), loop=client.loop).result()
                 number = int(path.split("/")[4].split(".")[0])
                 image_attachments.append(message.attachments[number])
+                messages.append(message)
         except Exception as e:
             print("failed to find!")
             exc_type, exc_obj, exc_tb = sys.exc_info()
@@ -279,7 +295,7 @@ def image_search(interaction, term):
     for result in discord_attacher[interaction]:
         if type(result) == discord.File:
             results.append(result)
-    asyncio.run_coroutine_threadsafe(coro=interaction.followup.send("Here are " + str(len(results)) + " results.", files=results), loop=client.loop)
+    asyncio.run_coroutine_threadsafe(coro=message_view_sender(interaction, "Here are " + str(len(results)) + " results.", results, [message.jump_url for message in messages]), loop=client.loop)
     del discord_attacher[interaction]
 
 @client.event
