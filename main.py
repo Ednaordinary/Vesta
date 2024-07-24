@@ -4,6 +4,7 @@ import time
 import io
 import os
 import gc
+import vram
 import asyncio
 from typing import Optional
 from dotenv import load_dotenv
@@ -58,22 +59,32 @@ def downloader():
             threading.Thread(target=download_thread, args=[url, path]).start()
 
 def encoder():
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(async_encoder())
+
+async def async_encoder():
     global model
     global model_queue
     global searchers
-    model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", model_kwargs=dict(attn_implementation="flash_attention_2")).to("cpu")
+    model = None
     gc.collect()
     torch.cuda.empty_cache()
     while True:
         while model_queue == []:
-            if not model.device.type == "cpu" and searchers <= 0:
+            if model and searchers <= 0:
                 searchers = 0
-                model = model.to('cpu')
+                model = None
                 gc.collect()
                 torch.cuda.empty_cache()
+                vram.deallocate("Vesta")
             time.sleep(0.02)
         searchers += 1 # the searcher thread will also try to handle model migration. stop it
-        if model.device.type != "cuda": model = model.to("cuda"); print(term_colors.LOAD + " loading encoder on gpu " + term_colors.END, end='')
+        if not model:
+            vram.allocate("Vesta")
+            async for i in vram.wait_for_allocation("Vesta"):
+                pass
+            model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", model_kwargs=dict(attn_implementation="flash_attention_2")).to("cuda")
+            print(term_colors.LOAD + " loading encoder on gpu " + term_colors.END, end='')
         now = [x for x in model_queue]
         model_queue = []
         paths = []
@@ -94,7 +105,6 @@ def encoder():
             print("\nencoder caught up!")
 
 async def image_indexer(channel):
-    global model
     global model_users
     global download_queue
     try:
@@ -112,7 +122,7 @@ async def image_indexer(channel):
         os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
         async for message in channel.history(limit=None, after=last_time):
             print(".", end='', flush=True)
-            if message.attachments and message.attachments != [] and message.author.id != client.user.id:
+            if message.attachments and message.attachments != [] and not message.author.bot:
                 if type(channel) == discord.TextChannel:
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + str(message.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
@@ -204,22 +214,30 @@ def unload_model():
     #just because handling it in the image_search thread takes time
     global model
     global searchers
-    model = model.to('cpu')
+    model = None
     gc.collect()
     torch.cuda.empty_cache()
+    vram.deallocate("Vesta")
 
 def image_search_loader(interaction, path):
     global discord_attacher
     discord_attacher[interaction].append((path, np.load(path)))
 
 def image_search(interaction, term):
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(async_image_search(interaction, term))
+
+async def async_image_search(interaction, term):
     #Changed to a different thread because otherwise it blocks and concurrent requests aren't handled
     global searchers
     global model
     global discord_attacher
     term = term.strip()
     searchers += 1
-    model = model.to("cuda")
+    vram.allocate("Vesta")
+    async for i in vram.wait_for_allocation("Vesta"):
+        asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Waiting for " + i + " before loading model."), loop=client.loop)
+    model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", model_kwargs=dict(attn_implementation="flash_attention_2")).to("cuda")
     term_embeds = model.encode(term)
     searchers -= 1
     # encoder thread will take care of it. causes errors I think
@@ -282,13 +300,13 @@ def image_search(interaction, term):
     for result in discord_attacher[interaction]:
         if type(result) == discord.File:
             results.append(result)
-    asyncio.run_coroutine_threadsafe(coro=interaction.followup.send("Results:" + "".join([("\n" + str(ind+1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages])]), files=results), loop=client.loop)
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join([("\n" + str(ind+1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages])]), files=results), loop=client.loop)
     del discord_attacher[interaction]
 
 @client.event
 async def on_message(message):
     global model_users
-    if message.attachments and message.attachments != [] and message.author.id != client.user.id:
+    if message.attachments and message.attachments != [] and not message.author.bot:
         if type(message.channel) == discord.TextChannel:
             os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
@@ -367,14 +385,8 @@ async def find_image(
             description="Term to search for.",
         ),
 ):
-    await interaction.response.defer()
-    global model
-    if model == None:
-        while model == None:
-            time.sleep(0.01)
-        threading.Thread(target=image_search, args=[interaction, term]).start()
-    else:
-        threading.Thread(target=image_search, args=[interaction, term]).start()
+    await interaction.response.send_message("Searching...")
+    threading.Thread(target=image_search, args=[interaction, term]).start()
 
 threading.Thread(target=downloader).start()
 threading.Thread(target=encoder).start()
