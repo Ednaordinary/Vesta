@@ -305,6 +305,8 @@ async def async_image_search(interaction, term):
 
 @client.event
 async def on_message(message):
+    if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
+        return
     global model_users
     if message.attachments and message.attachments != [] and not message.author.bot:
         if type(message.channel) == discord.TextChannel:
