@@ -352,6 +352,8 @@ async def on_raw_message_edit(payload):
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
         message = await channel.fetch_message(message_id)
+        if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
+            return
         if message.attachments and message.attachments != [] and message.author.id != client.user.id:
             if model_users == 0: # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
                 with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
@@ -366,7 +368,9 @@ async def on_raw_message_edit(payload):
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)) 
         message = await channel.fetch_message(message_id)
-        if message.attachments and message.attachments != [] and message.user.id != client.user.id:
+        if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
+            return
+        if message.attachments and message.attachments != [] and message.author.id != client.user.id:
             if model_users == 0: # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
                 with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt", "w") as progress_lock:
                     progress_lock.write(str(time.time()))
