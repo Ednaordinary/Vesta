@@ -24,7 +24,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
-client = discord.Client(intents=intents)
+client = discord.AutoShardedClient(intents=intents)
 #model = SentenceTransformer('clip-ViT-L-14').to("cpu")
 #model = SentenceTransformer('laion/CLIP-ViT-bigG-14-laion2B-39B-b160k').to("cpu")
 model = None
@@ -32,7 +32,8 @@ model_users = 0
 model_queue = []
 searchers = 0
 download_queue = []
-
+messages = {}
+image_attachments = {}
 
 class term_colors:
     LOAD = '\033[96m'  # On load or unload state
@@ -231,18 +232,13 @@ def image_search_download(interaction, attachment, idx):
         file_end = ".jpg"
     elif attachment.content_type == "image/png":
         file_end = ".png"
-    discord_attacher[interaction][idx] = discord.File(fp=io.BytesIO(requests.get(attachment.url).content),
+    new_image = Image.open(io.BytesIO(requests.get(attachment.url).content)).convert(mode='RGB')
+    new_image.thumbnail((768, 768))
+    imageio = io.BytesIO()
+    new_image.save(imageio, format='JPEG')
+    imageio.seek(0)
+    discord_attacher[interaction][idx] = discord.File(fp=imageio,
                                                       filename=str(idx) + file_end)
-
-
-def unload_model():
-    #just because handling it in the image_search thread takes time
-    global model
-    global searchers
-    model = None
-    gc.collect()
-    torch.cuda.empty_cache()
-    vram.deallocate("Vesta")
 
 
 def image_search_loader(interaction, path):
@@ -254,12 +250,22 @@ def image_search(interaction, term):
     loop = asyncio.new_event_loop()
     loop.run_until_complete(async_image_search(interaction, term))
 
+def message_fetch(interaction, channel, message, number, index):
+    global messages
+    global image_attachments
+    channel = client.get_channel(channel)
+    message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(message),
+                                               loop=client.loop).result()
+    image_attachments[interaction][index] = message.attachments[number]
+    messages[interaction][index] = message
 
 async def async_image_search(interaction, term):
     #Changed to a different thread because otherwise it blocks and concurrent requests aren't handled
     global searchers
     global model
     global discord_attacher
+    global messages
+    global image_attachments
     term = term.strip()
     searchers += 1
     vram.allocate("Vesta")
@@ -268,13 +274,12 @@ async def async_image_search(interaction, term):
             coro=interaction.edit_original_message(content="Waiting for " + i + " before loading model."),
             loop=client.loop)
     start_time = time.time()
+    print("starting compute")
     model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                model_kwargs=dict(attn_implementation="flash_attention_2")).to("cuda")
+                                model_kwargs=dict(attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, device_map="cuda")).to("cuda")
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Model Loaded"), loop=client.loop)
     term_embeds = model.encode(term)
     searchers -= 1
-    # encoder thread will take care of it. causes errors I think
-    #if searchers == 0:
-    #    threading.Thread(target=unload_model).start()
     discord_attacher[interaction] = []
     threads = []
     for path in [os.path.join(dp, f) for dp, dn, fn in os.walk(os.path.expanduser("index/" + str(interaction.guild.id)))
@@ -291,34 +296,30 @@ async def async_image_search(interaction, term):
         paths.append(emb_idx[0])
         embeds.append(emb_idx[1])
     del discord_attacher[interaction]
+    print("compute time up to similarity:", time.time() - start_time)
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Finding similarities"),
+                                     loop=client.loop)
     scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cuda"),
                                torch.tensor(np.array(embeds), device="cuda"))
     values, idxs = torch.topk(scores, 10)
-    end_time = time.time()
-    print("compute time:", end_time - start_time)
+    print("compute time:", time.time() - start_time)
     images = []
     for idx in idxs[0]:
         if isinstance(idx.item(), int):
             images.append(paths[int(idx)])
-    image_attachments = []
-    messages = []
+    image_attachments[interaction] = [None]*len(images)
+    messages[interaction] = [None]*len(images)
+    message_fetcher_threads = []
+    index = 0
     for path in images:
         path = str(path)
         try:
             if "threads" in path:
-                channel = client.get_channel(int(path.split("/")[4]))
-                message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[5])),
-                                                           loop=client.loop).result()
-                number = int(path.split("/")[6].split(".")[0])
-                image_attachments.append(message.attachments[number])
-                messages.append(message)
+                message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[4]), int(path.split("/")[5]), int(path.split("/")[6].split(".")[0]), index]))
+                index += 1
             else:
-                channel = client.get_channel(int(path.split("/")[2]))
-                message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(int(path.split("/")[3])),
-                                                           loop=client.loop).result()
-                number = int(path.split("/")[4].split(".")[0])
-                image_attachments.append(message.attachments[number])
-                messages.append(message)
+                message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[2]), int(path.split("/")[3]), int(path.split("/")[4].split(".")[0]), index]))
+                index += 1
         except Exception as e:
             print("failed to find!")
             exc_type, exc_obj, exc_tb = sys.exc_info()
@@ -326,9 +327,15 @@ async def async_image_search(interaction, term):
             print(exc_type, fname, exc_tb.tb_lineno)
             print(repr(e))
             pass
+    for message_fetcher in message_fetcher_threads:
+        message_fetcher.start()
+    for message_fetcher in message_fetcher_threads:
+        message_fetcher.join()
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction]])])), loop=client.loop)
     download_threads = []
-    discord_attacher[interaction] = [0] * len(image_attachments)
-    for idx, attachment in enumerate(image_attachments):
+    discord_attacher[interaction] = [0] * len(image_attachments[interaction])
+    for idx, attachment in enumerate(image_attachments[interaction]):
         download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
     for thread in download_threads:
         thread.start()
@@ -339,9 +346,11 @@ async def async_image_search(interaction, term):
         if type(result) == discord.File:
             results.append(result)
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
-        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages])]),
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction]])]),
                                                                             files=results), loop=client.loop)
-    del discord_attacher[interaction]
+    del discord_attacher[interaction], message_fetcher_threads, messages[interaction], image_attachments[interaction]
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 @client.event
