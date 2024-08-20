@@ -1,6 +1,6 @@
 # Vesta
 
-## Find anything in 10 seconds
+## Find anything on a discord server in 10 seconds
 
 
 
