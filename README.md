@@ -1,5 +1,12 @@
 # Vesta
-Semantic image search in discord. Search all images in a sever with a text phrase!
+
+## Find anything in 10 seconds
+
+
+
+https://github.com/user-attachments/assets/b75c8449-a873-404f-b161-c38948e718a1
+
+
 
 ## Install
 
@@ -27,9 +34,4 @@ Then, create a ".env" with "DISCORD_TOKEN=" set to your token.
 
 `python3 ./main.py`
 
-The bot will start indexing all servers it is in straight away. Only embeddings are saved, so it shouldn't use too much storage. Your GPU will turn on a lot during this, as it downloads images as fast as possible and runs them in batches to the gpu.
-
-## Showcase
-
-Results in my server for "cat"
-![image](https://github.com/Ednaordinary/Vesta/assets/88869424/271c5697-917c-4430-91a7-9343658fb548)
+The bot will start indexing all servers it is in straight away. Only embeddings are saved, so it shouldn't use too much storage. Your GPU will turn on a lot during this, as it downloads images as fast as possible and runs them in batches to the gpu. It only fetchs the messages and images it needs to, everything else is cached.
