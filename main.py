@@ -273,8 +273,8 @@ async def async_image_search(interaction, term):
             loop=client.loop)
     start_time = time.time()
     print("starting compute")
-    model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                model_kwargs=dict(attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, device_map="cpu"))
+    model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", # , 
+                                model_kwargs=dict(torch_dtype=torch.bfloat16, device_map="cpu", low_cpu_mem_usage=True, attn_implementation="flash_attention_2"))
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Model Loaded"), loop=client.loop)
     term_embeds = model.encode(term)
     searchers -= 1
@@ -299,7 +299,8 @@ async def async_image_search(interaction, term):
                                      loop=client.loop)
     scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cpu"),
                                torch.tensor(np.array(embeds), device="cpu"))
-    values, idxs = torch.topk(scores, 10)
+    #print(scores.shape)
+    values, idxs = torch.topk(scores, min(10, int(scores.shape[1])))
     print("compute time:", time.time() - start_time)
     images = []
     for idx in idxs[0]:
