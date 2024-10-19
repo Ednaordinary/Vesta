@@ -33,6 +33,7 @@ searchers = 0
 download_queue = []
 messages = {}
 image_attachments = {}
+discord_attacher = {}
 
 class term_colors:
     LOAD = '\033[96m'  # On load or unload state
@@ -214,21 +215,6 @@ async def on_ready():
         threading.Thread(target=add_guild_instance, args=[guild]).start()
 
 
-discord_attacher = {}
-
-
-def image_search_download(interaction, attachment, idx):
-    #multi thread this because downloading takes a long time
-    global discord_attacher
-    new_image = Image.open(io.BytesIO(requests.get(attachment.url).content)).convert(mode='RGB')
-    new_image.thumbnail((768, 768))
-    imageio = io.BytesIO()
-    new_image.save(imageio, format='JPEG')
-    imageio.seek(0)
-    discord_attacher[interaction][idx] = discord.File(fp=imageio,
-                                                      filename=str(idx) + ".jpg")
-
-
 def image_search_loader(interaction, path):
     global discord_attacher
     discord_attacher[interaction].append((path, np.load(path)))
@@ -244,7 +230,13 @@ def message_fetch(interaction, channel, message, number, index):
     channel = client.get_channel(channel)
     message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(message),
                                                loop=client.loop).result()
-    image_attachments[interaction][index] = message.attachments[number]
+    new_image = Image.open(io.BytesIO(requests.get(message.attachments[number].url).content)).convert(mode='RGB')
+    new_image.thumbnail((768, 768))
+    imageio = io.BytesIO()
+    new_image.save(imageio, format='JPEG')
+    imageio.seek(0)
+    image_attachments[interaction][index] = discord.File(fp=imageio,
+                                                      filename=str(index) + ".jpg")
     messages[interaction][index] = message
 
 async def async_image_search(interaction, term):
@@ -294,15 +286,18 @@ async def async_image_search(interaction, term):
     image_attachments[interaction] = [None]*len(images)
     messages[interaction] = [None]*len(images)
     message_fetcher_threads = []
+    message_links = []
     index = 0
     for path in images:
         path = str(path)
         try:
             if "threads" in path:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[4]), int(path.split("/")[5]), int(path.split("/")[6].split(".")[0]), index]))
+                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split)[4]) + "/" + str(int(path.split("/")[5])))
                 index += 1
             else:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[2]), int(path.split("/")[3]), int(path.split("/")[4].split(".")[0]), index]))
+                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split("/")[2])) + "/" + str(int(path.split("/")[3])))
                 index += 1
         except Exception as e:
             print("failed to find!")
@@ -311,29 +306,27 @@ async def async_image_search(interaction, term):
             print(exc_type, fname, exc_tb.tb_lineno)
             print(repr(e))
             pass
+    print(message_links)
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate(message_links)])), loop=client.loop)
     for message_fetcher in message_fetcher_threads:
         message_fetcher.start()
     for message_fetcher in message_fetcher_threads:
         message_fetcher.join()
-    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
-        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])])), loop=client.loop)
     download_threads = []
     image_attachments[interaction] = [x for x in image_attachments[interaction] if x != None]
-    discord_attacher[interaction] = [0] * len(image_attachments[interaction])
-    for idx, attachment in enumerate(image_attachments[interaction]):
-        download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
-    for thread in download_threads:
-        thread.start()
-    for thread in download_threads:
-        thread.join()
-    results = []
-    for result in discord_attacher[interaction]:
-        if type(result) == discord.File:
-            results.append(result)
+    #discord_attacher[interaction] = [0] * len(image_attachments[interaction])
+    #for idx, attachment in enumerate(image_attachments[interaction]):
+    #    download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
+    #for thread in download_threads:
+    #    thread.start()
+    #for thread in download_threads:
+    #    thread.join()
+    results = [x for x in image_attachments[interaction] if type(x) == discord.File]
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
         [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])]),
                                                                             files=results), loop=client.loop)
-    del discord_attacher[interaction], message_fetcher_threads, messages[interaction], image_attachments[interaction]
+    del message_fetcher_threads, messages[interaction], image_attachments[interaction]
     gc.collect()
 
 
