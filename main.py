@@ -225,18 +225,13 @@ discord_attacher = {}
 def image_search_download(interaction, attachment, idx):
     #multi thread this because downloading takes a long time
     global discord_attacher
-    file_end = ""
-    if attachment.content_type == "image/jpeg":
-        file_end = ".jpg"
-    elif attachment.content_type == "image/png":
-        file_end = ".png"
     new_image = Image.open(io.BytesIO(requests.get(attachment.url).content)).convert(mode='RGB')
     new_image.thumbnail((768, 768))
     imageio = io.BytesIO()
     new_image.save(imageio, format='JPEG')
     imageio.seek(0)
     discord_attacher[interaction][idx] = discord.File(fp=imageio,
-                                                      filename=str(idx) + file_end)
+                                                      filename=str(idx) + ".jpg")
 
 
 def image_search_loader(interaction, path):
@@ -333,6 +328,7 @@ async def async_image_search(interaction, term):
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
         [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])])), loop=client.loop)
     download_threads = []
+    image_attachments[interaction] = [x for x in image_attachments[interaction] if x != None]
     discord_attacher[interaction] = [0] * len(image_attachments[interaction])
     for idx, attachment in enumerate(image_attachments[interaction]):
         download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
