@@ -332,7 +332,7 @@ async def async_image_search(interaction, term):
     for message_fetcher in message_fetcher_threads:
         message_fetcher.join()
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
-        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction]])])), loop=client.loop)
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])])), loop=client.loop)
     download_threads = []
     discord_attacher[interaction] = [0] * len(image_attachments[interaction])
     for idx, attachment in enumerate(image_attachments[interaction]):
@@ -346,7 +346,7 @@ async def async_image_search(interaction, term):
         if type(result) == discord.File:
             results.append(result)
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
-        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction]])]),
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])]),
                                                                             files=results), loop=client.loop)
     del discord_attacher[interaction], message_fetcher_threads, messages[interaction], image_attachments[interaction]
     gc.collect()
