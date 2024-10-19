@@ -4,7 +4,6 @@ import time
 import io
 import os
 import gc
-import vram
 import asyncio
 from typing import Optional
 from dotenv import load_dotenv
@@ -80,13 +79,9 @@ async def async_encoder():
                 searchers = 0
                 model = None
                 gc.collect()
-                vram.deallocate("Vesta")
             time.sleep(0.02)
         searchers += 1  # the searcher thread will also try to handle model migration. stop it
         if not model:
-            vram.allocate("Vesta")
-            async for i in vram.wait_for_allocation("Vesta"):
-                pass
             model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
                                         model_kwargs=dict(attn_implementation="flash_attention_2"))
             print(term_colors.LOAD + " loading encoder on cpu " + term_colors.END, end='')
@@ -261,11 +256,6 @@ async def async_image_search(interaction, term):
     global image_attachments
     term = term.strip()
     searchers += 1
-    vram.allocate("Vesta")
-    async for i in vram.wait_for_allocation("Vesta"):
-        asyncio.run_coroutine_threadsafe(
-            coro=interaction.edit_original_message(content="Waiting for " + i + " before loading model."),
-            loop=client.loop)
     start_time = time.time()
     print("starting compute")
     model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./", # , 
