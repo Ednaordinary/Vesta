@@ -74,14 +74,12 @@ async def async_encoder():
     global searchers
     model = None
     gc.collect()
-    torch.cuda.empty_cache()
     while True:
         while model_queue == []:
             if model and searchers <= 0:
                 searchers = 0
                 model = None
                 gc.collect()
-                torch.cuda.empty_cache()
                 vram.deallocate("Vesta")
             time.sleep(0.02)
         searchers += 1  # the searcher thread will also try to handle model migration. stop it
@@ -90,8 +88,8 @@ async def async_encoder():
             async for i in vram.wait_for_allocation("Vesta"):
                 pass
             model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                        model_kwargs=dict(attn_implementation="flash_attention_2")).to("cuda")
-            print(term_colors.LOAD + " loading encoder on gpu " + term_colors.END, end='')
+                                        model_kwargs=dict(attn_implementation="flash_attention_2"))
+            print(term_colors.LOAD + " loading encoder on cpu " + term_colors.END, end='')
         now = [x for x in model_queue]
         model_queue = []
         paths = []
@@ -276,7 +274,7 @@ async def async_image_search(interaction, term):
     start_time = time.time()
     print("starting compute")
     model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                model_kwargs=dict(attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, device_map="cuda")).to("cuda")
+                                model_kwargs=dict(attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, device_map="cpu"))
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Model Loaded"), loop=client.loop)
     term_embeds = model.encode(term)
     searchers -= 1
@@ -299,8 +297,8 @@ async def async_image_search(interaction, term):
     print("compute time up to similarity:", time.time() - start_time)
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Finding similarities"),
                                      loop=client.loop)
-    scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cuda"),
-                               torch.tensor(np.array(embeds), device="cuda"))
+    scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cpu"),
+                               torch.tensor(np.array(embeds), device="cpu"))
     values, idxs = torch.topk(scores, 10)
     print("compute time:", time.time() - start_time)
     images = []
@@ -350,7 +348,6 @@ async def async_image_search(interaction, term):
                                                                             files=results), loop=client.loop)
     del discord_attacher[interaction], message_fetcher_threads, messages[interaction], image_attachments[interaction]
     gc.collect()
-    torch.cuda.empty_cache()
 
 
 @client.event
