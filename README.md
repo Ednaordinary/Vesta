@@ -20,11 +20,11 @@ https://github.com/user-attachments/assets/b75c8449-a873-404f-b161-c38948e718a1
 
 `pip install -r requirements.txt`
 
-`cd laion/bigG`
+`cd laion/DCXL`
 
-`git-lfs https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k`
+`git-lfs https://huggingface.co/laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K`
 
-`mv CLIP-ViT-bigG-14-laion2B-39B-b160k 0_CLIPModel`
+`mv CLIP-ViT-L-14-DataComp.XL-s13B-b90K 0_CLIPModel`
 
 `mv preprocessor_config.json ./0_CLIPModel`
 
