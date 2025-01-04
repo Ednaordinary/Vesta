@@ -13,6 +13,8 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as ST_util
 from PIL import Image, ImageFile
 import numpy as np
+import numpy.lib.format
+import struct
 import shutil
 from pathlib import Path
 import torch
@@ -20,13 +22,10 @@ import requests
 import datetime
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
 client = discord.AutoShardedClient(intents=intents)
-#model = SentenceTransformer('clip-ViT-L-14').to("cpu")
-#model = SentenceTransformer('laion/CLIP-ViT-bigG-14-laion2B-39B-b160k').to("cpu")
 model = None
 model_users = 0
 model_queue = []
@@ -34,6 +33,7 @@ searchers = 0
 download_queue = []
 messages = {}
 image_attachments = {}
+discord_attacher = {}
 
 class term_colors:
     LOAD = '\033[96m'  # On load or unload state
@@ -67,6 +67,14 @@ def encoder():
     loop = asyncio.new_event_loop()
     loop.run_until_complete(async_encoder())
 
+def np_save(file, array):
+    magic_string=b"\x93NUMPY\x01\x00v\x00"
+    header=bytes(("{'descr': '"+array.dtype.descr[0][1]+"', 'fortran_order': False, 'shape': "+str(array.shape)+", }").ljust(127-len(magic_string))+"\n",'utf-8')
+    if type(file) == str:
+        file=open(file,"wb")
+    file.write(magic_string)
+    file.write(header)
+    file.write(array.data)
 
 async def async_encoder():
     global model
@@ -82,6 +90,7 @@ async def async_encoder():
                 model = None
                 gc.collect()
                 torch.cuda.empty_cache()
+                #numba_device.reset()
                 vram.deallocate("Vesta")
             time.sleep(0.02)
         searchers += 1  # the searcher thread will also try to handle model migration. stop it
@@ -89,11 +98,12 @@ async def async_encoder():
             vram.allocate("Vesta")
             async for i in vram.wait_for_allocation("Vesta"):
                 pass
-            model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                        model_kwargs=dict(attn_implementation="flash_attention_2")).to("cuda")
-            print(term_colors.LOAD + " loading encoder on gpu " + term_colors.END, end='')
+            model = SentenceTransformer('laion/DCXL', local_files_only=True, cache_folder="./",
+                                        model_kwargs=dict(attn_implementation="flash_attention_2"))
+            print(term_colors.LOAD + " loading encoder " + term_colors.END, end='')
         now = [x for x in model_queue]
-        model_queue = []
+        model_queue = now[512:]
+        now = now[:512]
         paths = []
         contents = []
         print(term_colors.ENCODER + "e:" + str(len(now)) + term_colors.END, end='')
@@ -104,7 +114,7 @@ async def async_encoder():
             try:
                 embeds = model.encode(contents)
                 for idx, embed in enumerate(embeds):
-                    np.save(paths[idx], embed)
+                    np_save(paths[idx], embed)
                     print(term_colors.ENCODER + "^" + term_colors.END, flush=True, end='')
             except:
                 pass
@@ -142,23 +152,20 @@ async def image_indexer(channel):
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(
                                 channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
                 elif type(channel) == discord.Thread:
-                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
-                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/threads", exist_ok=True)
-                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(
-                        channel.id), exist_ok=True)
+                    os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(message.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
                         if attachment.content_type in ["image/jpeg", "image/png"]:
                             print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.append(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(
-                                channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(idx) + ".npy")))
+                                channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
         with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt",
                   "w") as progress_lock:
             progress_lock.write(str(time.time()))
     except Exception as e:
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        print(exc_type, fname, exc_tb.tb_lineno)
-        print(repr(e))
+        #exc_type, exc_obj, exc_tb = sys.exc_info()
+        #fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+        #print(exc_type, fname, exc_tb.tb_lineno)
+        #print(repr(e))
         pass  #threading stuff is REALLY important to not break
     model_users -= 1
 
@@ -189,7 +196,6 @@ def add_guild_instance(guild):
                             exist_ok=True)
                 call_read_channel(thread)
         elif type(channel) == discord.Thread:
-            os.makedirs("./index/" + str(guild.id) + "/" + str(channel.parent.id), exist_ok=True)
             os.makedirs("./index/" + str(guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id),
                         exist_ok=True)
             call_read_channel(channel)
@@ -220,30 +226,22 @@ async def on_ready():
     for guild in client.guilds:
         threading.Thread(target=add_guild_instance, args=[guild]).start()
 
-
-discord_attacher = {}
-
-
-def image_search_download(interaction, attachment, idx):
-    #multi thread this because downloading takes a long time
-    global discord_attacher
-    file_end = ""
-    if attachment.content_type == "image/jpeg":
-        file_end = ".jpg"
-    elif attachment.content_type == "image/png":
-        file_end = ".png"
-    new_image = Image.open(io.BytesIO(requests.get(attachment.url).content)).convert(mode='RGB')
-    new_image.thumbnail((768, 768))
-    imageio = io.BytesIO()
-    new_image.save(imageio, format='JPEG')
-    imageio.seek(0)
-    discord_attacher[interaction][idx] = discord.File(fp=imageio,
-                                                      filename=str(idx) + file_end)
-
+def np_load(file):
+    if type(file) == str:
+        file=open(file,"rb")
+    header = file.read(128)
+    if not header:
+        return None
+    descr = str(header[19:25], 'utf-8').replace("'","").replace(" ","")
+    shape = tuple(int(num) for num in str(header[60:120], 'utf-8').replace(',)', ')').replace(', }', '').replace('(', '').replace(')', '').split(','))
+    datasize = numpy.lib.format.descr_to_dtype(descr).itemsize
+    for dimension in shape:
+        datasize *= dimension
+    return np.ndarray(shape, dtype=descr, buffer=file.read(datasize))
 
 def image_search_loader(interaction, path):
     global discord_attacher
-    discord_attacher[interaction].append((path, np.load(path)))
+    discord_attacher[interaction].append((path, np_load(path)))
 
 
 def image_search(interaction, term):
@@ -256,7 +254,13 @@ def message_fetch(interaction, channel, message, number, index):
     channel = client.get_channel(channel)
     message = asyncio.run_coroutine_threadsafe(coro=channel.fetch_message(message),
                                                loop=client.loop).result()
-    image_attachments[interaction][index] = message.attachments[number]
+    new_image = Image.open(io.BytesIO(requests.get(message.attachments[number].url).content)).convert(mode='RGB')
+    new_image.thumbnail((768, 768))
+    imageio = io.BytesIO()
+    new_image.save(imageio, format='JPEG')
+    imageio.seek(0)
+    image_attachments[interaction][index] = discord.File(fp=imageio,
+                                                      filename=str(index) + ".jpg")
     messages[interaction][index] = message
 
 async def async_image_search(interaction, term):
@@ -275,8 +279,9 @@ async def async_image_search(interaction, term):
             loop=client.loop)
     start_time = time.time()
     print("starting compute")
-    model = SentenceTransformer('laion/bigG', local_files_only=True, cache_folder="./",
-                                model_kwargs=dict(attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, device_map="cuda")).to("cuda")
+    if model == None:
+        model = SentenceTransformer('laion/DCXL', local_files_only=True, cache_folder="./", # , 
+                                model_kwargs=dict(torch_dtype=torch.bfloat16, device_map="cuda", low_cpu_mem_usage=True, attn_implementation="flash_attention_2"))
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Model Loaded"), loop=client.loop)
     term_embeds = model.encode(term)
     searchers -= 1
@@ -297,28 +302,49 @@ async def async_image_search(interaction, term):
         embeds.append(emb_idx[1])
     del discord_attacher[interaction]
     print("compute time up to similarity:", time.time() - start_time)
-    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Finding similarities"),
-                                     loop=client.loop)
-    scores = ST_util.dot_score(torch.tensor(np.array(term_embeds), device="cuda"),
+    #asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Searching... Finding similarities"),
+    #                                 loop=client.loop)
+    scores = ST_util.cos_sim(torch.tensor(np.array(term_embeds), device="cuda"),
                                torch.tensor(np.array(embeds), device="cuda"))
-    values, idxs = torch.topk(scores, 10)
+    print("compute time after similarity:", time.time() - start_time)
+    #print(scores.shape)
+    #deduplication
+    scores = scores.cpu()
+    scores = np.array([(i, x) for i, x in enumerate(scores[0])])
+    print("original:", scores.shape)
+    _, unique = np.unique(scores[:,1].round(decimals=6), return_index=True)
+    scores = torch.Tensor(scores[unique])
+    print("dedupe:", scores.shape)
+    print(scores)
+    #minp + topk sampling
+    if len(scores) > 0:
+        max_value = torch.max(scores[:,1])
+        scores = [(i, x) for i, x in scores if x > (float(max_value) * 0.8)]
+        scores_torch = torch.tensor([x for i, x in scores])
+        values, idxs = torch.topk(scores_torch, min(10, int(scores_torch.shape[0])))
+        idxs = [int(scores[x][0]) for x in idxs]
+    else:
+        values, idxs = [], []
     print("compute time:", time.time() - start_time)
     images = []
-    for idx in idxs[0]:
-        if isinstance(idx.item(), int):
+    for idx in idxs:
+        if isinstance(idx, int):
             images.append(paths[int(idx)])
     image_attachments[interaction] = [None]*len(images)
     messages[interaction] = [None]*len(images)
     message_fetcher_threads = []
+    message_links = []
     index = 0
     for path in images:
         path = str(path)
         try:
             if "threads" in path:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[4]), int(path.split("/")[5]), int(path.split("/")[6].split(".")[0]), index]))
+                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split)[4]) + "/" + str(int(path.split("/")[5])))
                 index += 1
             else:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[2]), int(path.split("/")[3]), int(path.split("/")[4].split(".")[0]), index]))
+                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split("/")[2])) + "/" + str(int(path.split("/")[3])))
                 index += 1
         except Exception as e:
             print("failed to find!")
@@ -327,34 +353,31 @@ async def async_image_search(interaction, term):
             print(exc_type, fname, exc_tb.tb_lineno)
             print(repr(e))
             pass
+    print(message_links)
+    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
+        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate(message_links)])), loop=client.loop)
     for message_fetcher in message_fetcher_threads:
         message_fetcher.start()
     for message_fetcher in message_fetcher_threads:
         message_fetcher.join()
-    asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
-        [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])])), loop=client.loop)
     download_threads = []
-    discord_attacher[interaction] = [0] * len(image_attachments[interaction])
-    for idx, attachment in enumerate(image_attachments[interaction]):
-        download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
-    for thread in download_threads:
-        thread.start()
-    for thread in download_threads:
-        thread.join()
-    results = []
-    for result in discord_attacher[interaction]:
-        if type(result) == discord.File:
-            results.append(result)
+    image_attachments[interaction] = [x for x in image_attachments[interaction] if x != None]
+    #discord_attacher[interaction] = [0] * len(image_attachments[interaction])
+    #for idx, attachment in enumerate(image_attachments[interaction]):
+    #    download_threads.append(threading.Thread(target=image_search_download, args=[interaction, attachment, idx]))
+    #for thread in download_threads:
+    #    thread.start()
+    #for thread in download_threads:
+    #    thread.join()
+    results = [x for x in image_attachments[interaction] if type(x) == discord.File]
     asyncio.run_coroutine_threadsafe(coro=interaction.edit_original_message(content="Results:" + "".join(
         [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])]),
                                                                             files=results), loop=client.loop)
-    del discord_attacher[interaction], message_fetcher_threads, messages[interaction], image_attachments[interaction]
+    del message_fetcher_threads, messages[interaction], image_attachments[interaction]
     gc.collect()
     torch.cuda.empty_cache()
 
-
-@client.event
-async def on_message(message):
+def image_index(message):
     if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
         return
     global model_users
@@ -372,16 +395,16 @@ async def on_message(message):
                 with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt",
                           "w") as progress_lock:
                     progress_lock.write(str(time.time()))
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(
-                message.channel.id), exist_ok=True)
+            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(message.id), exist_ok=True)
             for idx, attachment in enumerate(message.attachments):
                 if attachment.content_type in ["image/jpeg", "image/png"]:
                     print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                     download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(
-                        message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
+                        message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
 
+@client.event
+async def on_message(message):
+    image_index(message)
 
 @client.event
 async def on_raw_message_delete(payload):
@@ -394,13 +417,12 @@ async def on_raw_message_delete(payload):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
     elif type(channel) == discord.Thread:
         channel = client.get_channel(channel_id)
-        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
-            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id))
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id) + "/" + str(message_id)):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id) + "/" + str(message_id))
 
 
 @client.event
 async def on_raw_message_edit(payload):
-    global model_users
     channel_id = payload.channel_id
     guild_id = payload.guild_id
     message_id = payload.message_id
@@ -408,43 +430,37 @@ async def on_raw_message_edit(payload):
     if type(channel) == discord.TextChannel:
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/"):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/" + str(message_id) + "/")
-        message = await channel.fetch_message(message_id)
-        if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
-            return
-        if message.attachments and message.attachments != [] and not message.author.bot:
-            if model_users == 0:  # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
-                with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt",
-                          "w") as progress_lock:
-                    progress_lock.write(str(time.time()))
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + str(message.id),
-                        exist_ok=True)
-            for idx, attachment in enumerate(message.attachments):
-                if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
-                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(
-                        message.channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
+    elif type(channel) == discord.Thread:
+        channel = client.get_channel(channel_id)
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id) + "/" + str(message_id)):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id) + "/" + str(message_id))
+    try:
+        message = await client.fetch_message(message_id)
+    except:
+        pass
+    else:
+        image_index(message)
+
+@client.event
+async def on_member_update(before, after):
+    if after.id == client.user.id:
+        if before.roles != after.roles:
+            threading.Thread(target=add_guild_instance, args=[guild]).start()
+
+@client.event
+async def on_guild_channel_create(channel):
+    call_read_channel(channel)
+
+@client.event
+async def on_guild_channel_delete(channel):
+    call_read_channel(channel)
+    if type(channel) == discord.TextChannel:
+        if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel_id) + "/"):
+            shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel_id) + "/")
     elif type(channel) == discord.Thread:
         channel = client.get_channel(channel_id)
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id))
-        message = await channel.fetch_message(message_id)
-        if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
-            return
-        if message.attachments and message.attachments != [] and message.author.id != client.user.id:
-            if model_users == 0:  # update time only if indexer threads arent running (what if we Ctrl+c out after an on_message has been written but still indexing and all those messages dont get indexed?)
-                with open("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/" + "inprogress.txt",
-                          "w") as progress_lock:
-                    progress_lock.write(str(time.time()))
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id), exist_ok=True)
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.id) + "/threads", exist_ok=True)
-            os.makedirs("./index/" + str(message.guild.id) + "/" + str(message.channel.parent.id) + "/threads/" + str(
-                message.channel.id), exist_ok=True)
-            for idx, attachment in enumerate(message.attachments):
-                if attachment.content_type in ["image/jpeg", "image/png"]:
-                    print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
-                    download_queue.append(tuple((attachment, "./index/" + str(message.guild.id) + "/" + str(
-                        message.channel.parent.id) + "/threads/" + str(message.channel.id) + "/" + str(idx) + ".npy")))
-
 
 @client.slash_command(description="Search for an image with the description.")
 async def find_image(
@@ -461,4 +477,5 @@ async def find_image(
 
 threading.Thread(target=downloader).start()
 threading.Thread(target=encoder).start()
+#numba_device.reset()
 client.run(TOKEN)
