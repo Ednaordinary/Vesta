@@ -349,7 +349,7 @@ async def async_image_search(interaction, term):
         try:
             if "threads" in path:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[4]), int(path.split("/")[5]), int(path.split("/")[6].split(".")[0]), index]))
-                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split)[4]) + "/" + str(int(path.split("/")[5])))
+                message_links.append("https://discord.com/channels/" + str(interaction.guild.id) + "/" + str(int(path.split("/"))[4]) + "/" + str(int(path.split("/")[5])))
                 index += 1
             else:
                 message_fetcher_threads.append(threading.Thread(target=message_fetch, args=[interaction, int(path.split("/")[2]), int(path.split("/")[3]), int(path.split("/")[4].split(".")[0]), index]))
@@ -471,6 +471,10 @@ async def on_guild_channel_delete(channel):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id))
 
 @client.slash_command()
+async def find(interaction: discord.Interaction):
+    pass
+
+@find.subcommand(name="from")
 async def find_from(interaction: discord.Interaction):
     pass
 
