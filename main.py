@@ -490,7 +490,7 @@ async def text(
     await interaction.response.send_message("Searching...")
     threading.Thread(target=image_search, args=[interaction, term]).start()
 
-@find_from.subcommand(description="Search for an image based on a description.")
+@find_from.subcommand(description="Search for an image based on another image.")
 async def image(
         interaction: discord.Interaction,
         term: discord.Attachment
