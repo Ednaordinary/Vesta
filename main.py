@@ -20,6 +20,9 @@ from pathlib import Path
 import torch
 import requests
 import datetime
+import ctypes
+
+libc = ctypes.CDLL("libc.so.6") # Needed for memory management
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 load_dotenv()
@@ -41,6 +44,10 @@ class term_colors:
     ENCODER = '\033[92m'  # Encoder info
     END = '\033[0m'  #End coloring
 
+def flush():
+    gc.collect()
+    torch.cuda.empty_cache()
+    libc.malloc_trim(0)
 
 def download_thread(url, path):
     global model_queue
@@ -90,7 +97,6 @@ async def async_encoder():
                 model = None
                 gc.collect()
                 torch.cuda.empty_cache()
-                #numba_device.reset()
                 vram.deallocate("Vesta")
             time.sleep(0.02)
         searchers += 1  # the searcher thread will also try to handle model migration. stop it
@@ -121,6 +127,7 @@ async def async_encoder():
         searchers -= 1
         if model_queue == []:
             print("\nencoder caught up!")
+            flush()
 
 
 async def image_indexer(channel):
@@ -167,6 +174,7 @@ async def image_indexer(channel):
         #print(exc_type, fname, exc_tb.tb_lineno)
         #print(repr(e))
         pass  #threading stuff is REALLY important to not break
+    flush()
     model_users -= 1
 
 
@@ -270,7 +278,8 @@ async def async_image_search(interaction, term):
     global discord_attacher
     global messages
     global image_attachments
-    term = term.strip()
+    if isinstance(term, str):
+        term = term.strip()
     searchers += 1
     vram.allocate("Vesta")
     async for i in vram.wait_for_allocation("Vesta"):
@@ -374,8 +383,7 @@ async def async_image_search(interaction, term):
         [("\n" + str(ind + 1) + " - " + str(x)) for ind, x in enumerate([x.jump_url for x in messages[interaction] if x])]),
                                                                             files=results), loop=client.loop)
     del message_fetcher_threads, messages[interaction], image_attachments[interaction]
-    gc.collect()
-    torch.cuda.empty_cache()
+    flush()
 
 def image_index(message):
     if message.type != discord.MessageType.default and message.type != discord.MessageType.reply:
@@ -462,8 +470,12 @@ async def on_guild_channel_delete(channel):
         if os.path.isdir("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id)):
             shutil.rmtree("./index/" + str(guild_id) + "/" + str(channel.parent.id) + "/threads/" + str(channel_id))
 
-@client.slash_command(description="Search for an image with the description.")
-async def find_image(
+@client.slash_command()
+async def find_from(interaction: discord.Interaction):
+    pass
+
+@find_from.subcommand(description="Search for an image based on a description.")
+async def text(
         interaction: discord.Interaction,
         term: str = discord.SlashOption(
             name="term",
@@ -474,8 +486,25 @@ async def find_image(
     await interaction.response.send_message("Searching...")
     threading.Thread(target=image_search, args=[interaction, term]).start()
 
+@find_from.subcommand(description="Search for an image based on a description.")
+async def image(
+        interaction: discord.Interaction,
+        term: discord.Attachment
+):
+    if not term.content_type.lower() in ["image/png", "image/jpg", "image/jpeg"]:
+        await interaction.response.send_message("Term should be a png or jpg")
+        return
+    try:
+        termbytes = await term.read()
+        term = Image.open(io.BytesIO(termbytes))
+    except Exception as e:
+        print(repr(e))
+        await interaction.response.send_message("Something went wrong while opening the image.")
+        return
+    await interaction.response.send_message("Searching...")
+    threading.Thread(target=image_search, args=[interaction, term]).start()
+
 
 threading.Thread(target=downloader).start()
 threading.Thread(target=encoder).start()
-#numba_device.reset()
 client.run(TOKEN)
