@@ -8,3 +8,4 @@ scikit-image
 torch
 python-dotenv
 requests
+psutil

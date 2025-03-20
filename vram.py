@@ -23,7 +23,7 @@ def deallocate(name):
             if i[:-1] != name:
                 allocation_file.write(i)
 
-async def wait_for_allocation(name):
+def wait_for_allocation(name):
     last_allocation = None
     while True:
         with open(model_manager_path, "r") as allocation_file:
