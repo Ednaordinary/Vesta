@@ -17,7 +17,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cd laion/DCXL
-git-lfs https://huggingface.co/laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K
+# Please make sure you have git-lfs
+git clone https://huggingface.co/laion/CLIP-ViT-L-14-DataComp.XL-s13B-b90K
 mv CLIP-ViT-L-14-DataComp.XL-s13B-b90K 0_CLIPModel
 mv preprocessor_config.json ./0_CLIPModel
 cd ../..
