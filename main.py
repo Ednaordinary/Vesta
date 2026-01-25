@@ -462,7 +462,7 @@ async def on_raw_message_edit(payload):
 async def on_member_update(before, after):
     if after.id == client.user.id:
         if before.roles != after.roles:
-            threading.Thread(target=add_guild_instance, args=[guild]).start()
+            threading.Thread(target=add_guild_instance, args=[after.guild]).start()
 
 @client.event
 async def on_guild_channel_create(channel):
