@@ -1,3 +1,4 @@
+import traceback
 import nextcord as discord
 import sys
 import time
@@ -56,6 +57,7 @@ def download_thread(url, path):
         content = requests.get(url).content
         img = Image.open(io.BytesIO(content))
         model_queue.put(tuple((img, path)))
+        print(term_colors.DOWNLOAD + "x" + term_colors.END, end='')
         del content, img
     except:
         pass
@@ -138,10 +140,11 @@ def encoder():
             print(f'Current memory: {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 3:.3f}GiB')
 
 
-async def image_indexer(channel):
+async def image_indexer(channel: discord.TextChannel):
     global model_users
+    start_time = time.perf_counter()
     try:
-        last_time = None
+        last_time = datetime.datetime.fromtimestamp(1420070400)
         if os.path.exists("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt"):
             with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt",
                       "r") as progress_lock:
@@ -150,9 +153,11 @@ async def image_indexer(channel):
                 except:
                     time_stamp = "0"
                 if time_stamp in ["0", "1"]:
-                    last_time = None
+                    last_time = datetime.datetime.fromtimestamp(1420070400)
                 else:
                     last_time = datetime.datetime.fromtimestamp(float(time_stamp))
+        else:
+            start_time = None
         os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
         async for message in channel.history(limit=None, after=last_time):
             print(".", end='', flush=True)
@@ -162,20 +167,26 @@ async def image_indexer(channel):
                                 exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
                         if attachment.content_type in ["image/jpeg", "image/png"]:
-                            print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
+                            # print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.put(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(
                                 channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
                 elif type(channel) == discord.Thread:
                     os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(message.id), exist_ok=True)
                     for idx, attachment in enumerate(message.attachments):
                         if attachment.content_type in ["image/jpeg", "image/png"]:
-                            print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
+                            # print(term_colors.DOWNLOAD + "x" + term_colors.END, flush=True, end='')
                             download_queue.put(tuple((attachment, "./index/" + str(channel.guild.id) + "/" + str(
                                 channel.parent.id) + "/threads/" + str(channel.id) + "/" + str(message.id) + "/" + str(idx) + ".npy")))
         with open("./index/" + str(channel.guild.id) + "/" + str(channel.id) + "/" + "inprogress.txt",
                   "w") as progress_lock:
             progress_lock.write(str(time.time()))
+        try:
+            if start_time:
+                asyncio.run_coroutine_threadsafe(coro=channel.send(f"Finished indexing this channel ({str(int(time.perf_counter() - start_time))}s)"), loop=client.loop)
+        except:
+            pass
     except Exception as e:
+        print(traceback.format_exc())
         #exc_type, exc_obj, exc_tb = sys.exc_info()
         #fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         #print(exc_type, fname, exc_tb.tb_lineno)
@@ -328,11 +339,11 @@ async def async_image_search(interaction, term):
     #deduplication
     scores = scores.cpu()
     scores = np.array([(i, x) for i, x in enumerate(scores[0])])
-    print("original:", scores.shape)
-    _, unique = np.unique(scores[:,1].round(decimals=6), return_index=True)
-    scores = torch.Tensor(scores[unique])
-    print("dedupe:", scores.shape)
-    print(scores)
+    #print("original:", scores.shape)
+    #_, unique = np.unique(scores[:,1].round(decimals=6), return_index=True)
+    scores = torch.Tensor(scores)
+    #print("dedupe:", scores.shape)
+    #print(scores)
     #minp + topk sampling
     if len(scores) > 0:
         max_value = torch.max(scores[:,1])
