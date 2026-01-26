@@ -156,8 +156,7 @@ async def image_indexer(channel: discord.TextChannel):
                     last_time = datetime.datetime.fromtimestamp(1420070400)
                 else:
                     last_time = datetime.datetime.fromtimestamp(float(time_stamp))
-        else:
-            start_time = None
+                    start_time = None
         os.makedirs("./index/" + str(channel.guild.id) + "/" + str(channel.id), exist_ok=True)
         async for message in channel.history(limit=None, after=last_time):
             print(".", end='', flush=True)
